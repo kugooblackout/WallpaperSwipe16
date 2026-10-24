@@ -11,6 +11,3 @@ WallpaperSwipe16_FRAMEWORKS = UIKit Foundation QuartzCore
 WallpaperSwipe16_LDFLAGS = -undefined dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/tweak.mk
-
-after-install::
-	install.exec "killall -9 SpringBoard"
