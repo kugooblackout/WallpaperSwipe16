@@ -31,7 +31,9 @@ static BOOL gShrunk = NO;
     NSMutableArray *out = [NSMutableArray array];
     for (NSString *name in all) {
         NSString *ext = name.pathExtension.lowercaseString;
-        if ([@[@"jpg", @"jpeg", @"png", @"heic", @"heif"] containsObject:ext]) [out addObject:name];
+        if ([@[@"jpg", @"jpeg", @"png", @"heic", @"heif"] containsObject:ext]) {
+            [out addObject:name];
+        }
     }
     [out sortUsingSelector:@selector(localizedStandardCompare:)];
     return out;
@@ -58,7 +60,6 @@ static BOOL gShrunk = NO;
 + (BOOL)applyImage:(UIImage *)img {
     if (!img) return NO;
 
-    // Метод 1: PLStaticWallpaperImageViewController
     Class PL = NSClassFromString(@"PLStaticWallpaperImageViewController");
     if (!PL) {
         dlopen("/System/Library/PrivateFrameworks/PhotoLibraryServices.framework/PhotoLibraryServices", RTLD_LAZY);
@@ -86,31 +87,39 @@ static BOOL gShrunk = NO;
         }
     }
 
-    // Метод 2: SBWallpaperController
     Class WC = NSClassFromString(@"SBWallpaperController");
     if (WC) {
         id controller = nil;
-        if ([WC respondsToSelector:@selector(sharedInstance)])
+        if ([WC respondsToSelector:@selector(sharedInstance)]) {
             controller = [WC performSelector:@selector(sharedInstance)];
-        else if ([WC respondsToSelector:@selector(sharedInstanceIfExists)])
+        } else if ([WC respondsToSelector:@selector(sharedInstanceIfExists)]) {
             controller = [WC performSelector:@selector(sharedInstanceIfExists)];
+        }
 
         if (controller) {
             struct { SEL sel; int mode; } tries[] = {
                 { @selector(setWallpaperImage:forVariant:options:completionHandler:), 4 },
                 { @selector(setWallpaperImage:forVariant:options:), 3 },
-                { @ Fselector(setWallpaperImage:forVariant:), OUND2 },
-                { @selector(setWallpaperImage",:), 1 },
+                { @selector(setWallpaperImage:forVariant:), 2 },
+                { @selector(setWallpaperImage:), 1 },
             };
             for (int i = 0; i < sizeof(tries)/sizeof(tries[0]); i++) {
                 SEL s = tries[i].sel;
                 if (![controller respondsToSelector:s]) continue;
                 @try {
                     switch (tries[i].mode) {
-                        case 4: ((void (*)(id, SEL, UIImage *, NSInteger, id, id))objc_msgSend)( name); returncontroller, s, img, 0, nil, nil); return YES;
-                        case 3: ((void (*)(id, SEL, UIImage *, NSInteger, id))objc_msgSend)(controller, s, img, 0, nil); return YES;
-                        case 2: ((void (*)(id, SEL, UIImage *, NSInteger))objc_msgSend)(controller, s, img, 0); return YES;
-                        case 1: ((void (*)(id, SEL, UIImage *))objc_msgSend)(controller, s, img); return YES;
+                        case 4:
+                            ((void (*)(id, SEL, UIImage *, NSInteger, id, id))objc_msgSend)(controller, s, img, 0, nil, nil);
+                            return YES;
+                        case 3:
+                            ((void (*)(id, SEL, UIImage *, NSInteger, id))objc_msgSend)(controller, s, img, 0, nil);
+                            return YES;
+                        case 2:
+                            ((void (*)(id, SEL, UIImage *, NSInteger))objc_msgSend)(controller, s, img, 0);
+                            return YES;
+                        case 1:
+                            ((void (*)(id, SEL, UIImage *))objc_msgSend)(controller, s, img);
+                            return YES;
                     }
                 } @catch (NSException *e) {
                     NSLog(@"[WS16] WC exception: %@", e);
@@ -132,7 +141,10 @@ static BOOL gShrunk = NO;
 
 + (void)dumpClass:(NSString *)name {
     Class c = NSClassFromString(name);
-    if (!c) { NSLog(@"[WS16] %@ NOT; }
+    if (!c) {
+        NSLog(@"[WS16] %@ NOT FOUND", name);
+        return;
+    }
     NSLog(@"[WS16] %@ = %p", name, c);
     unsigned int mCount = 0;
     Method *methods = class_copyMethodList(c, &mCount);
@@ -161,8 +173,7 @@ static BOOL gShrunk = NO;
 - (void)ws16_setupGesture {
     UIView *v = self.view;
     if (!v || [v viewWithTag:0x57533136]) return;
-    UILongPressGestureRecognizer *lp =
-        [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(ws16_handle:)];
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(ws16_handle:)];
     lp.minimumPressDuration = [WSPrefs longPressDuration];
     lp.allowableMovement = 10.0;
     lp.tag = 0x57533136;
@@ -174,8 +185,9 @@ static BOOL gShrunk = NO;
     if (!v) return;
     if (g.state == UIGestureRecognizerStateBegan) {
         [self ws16_shrink:v];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ [self ws16_showOverlay]; });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self ws16_showOverlay];
+        });
     }
 }
 
@@ -186,8 +198,7 @@ static BOOL gShrunk = NO;
         UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [h impactOccurred];
     }
-    [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0.4
-                        options:UIViewAnimationOptionCurveEaseOut animations:^{
+    [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0.4 options:UIViewAnimationOptionCurveEaseOut animations:^{
         v.transform = CGAffineTransformMakeScale(0.92, 0.92);
         v.layer.cornerRadius = 30;
         v.clipsToBounds = YES;
@@ -197,8 +208,7 @@ static BOOL gShrunk = NO;
 - (void)ws16_restore:(UIView *)v {
     if (!gShrunk) return;
     gShrunk = NO;
-    [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0.4
-                        options:UIViewAnimationOptionCurveEaseOut animations:^{
+    [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0.4 options:UIViewAnimationOptionCurveEaseOut animations:^{
         v.transform = CGAffineTransformIdentity;
         v.layer.cornerRadius = 0;
     } completion:nil];
@@ -208,9 +218,7 @@ static BOOL gShrunk = NO;
     if (gOverlay) return;
     NSInteger count = [WSWallpaperHelper count];
     if (count == 0) {
-        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"WallpaperSwipe16"
-            message:@"Добавь изображения в /var/mobile/Library/WallpaperSwipe16/"
-            preferredStyle:UIAlertControllerStyleAlert];
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"WallpaperSwipe16" message:@"Добавь изображения в /var/mobile/Library/WallpaperSwipe16/" preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
         [self ws16_restore:self.view];
@@ -221,9 +229,7 @@ static BOOL gShrunk = NO;
         UIImage *im = [WSWallpaperHelper imageAtIndex:i];
         if (im) [imgs addObject:im];
     }
-    WSOverlayView *ov = [[WSOverlayView alloc] initWithFrame:self.view.bounds
-                                                     images:imgs
-                                               initialIndex:[WSWallpaperHelper savedIndex]];
+    WSOverlayView *ov = [[WSOverlayView alloc] initWithFrame:self.view.bounds images:imgs initialIndex:[WSWallpaperHelper savedIndex]];
     ov.delegate = (id<WSOverlayViewDelegate>)self;
     [self.view addSubview:ov];
     gOverlay = ov;
@@ -231,7 +237,8 @@ static BOOL gShrunk = NO;
 }
 
 - (void)overlayDidCancel:(WSOverlayView *)v {
-    [v dismiss]; gOverlay = nil;
+    [v dismiss];
+    gOverlay = nil;
     [self ws16_restore:self.view];
 }
 
@@ -239,14 +246,13 @@ static BOOL gShrunk = NO;
     [WSWallpaperHelper saveIndex:index];
     UIImage *img = [WSWallpaperHelper imageAtIndex:index];
     [WSWallpaperHelper applyImage:img];
-    [v dismiss]; gOverlay = nil;
+    [v dismiss];
+    gOverlay = nil;
     [self ws16_restore:self.view];
 }
 
 - (void)overlayDidTapAdd:(WSOverlayView *)v {
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Добавить обои"
-        message:@"Открой Filza и помести изображения в\n/var/mobile/Library/WallpaperSwipe16/"
-        preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Добавить обои" message:@"Открой Filza и помести изображения в\n/var/mobile/Library/WallpaperSwipe16/" preferredStyle:UIAlertControllerStyleAlert];
     [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:a animated:YES completion:nil];
 }
