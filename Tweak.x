@@ -157,7 +157,16 @@ static BOOL gShrunk = NO;
 
 #pragma mark - SpringBoard Hook
 
-@interface SBLockScreenViewController : UIViewController
+// Объявляем методы, чтобы компилятор не ругался
+@interface SBLockScreenViewController : UIViewController <WSOverlayViewDelegate>
+- (void)ws16_setupGesture;
+- (void)ws16_handle:(UILongPressGestureRecognizer *)g;
+- (void)ws16_shrink:(UIView *)v;
+- (void)ws16_restore:(UIView *)v;
+- (void)ws16_showOverlay;
+- (void)overlayDidCancel:(WSOverlayView *)v;
+- (void)overlay:(WSOverlayView *)v didSelectIndex:(NSInteger)index;
+- (void)overlayDidTapAdd:(WSOverlayView *)v;
 @end
 
 %hook SBLockScreenViewController
@@ -172,11 +181,18 @@ static BOOL gShrunk = NO;
 
 - (void)ws16_setupGesture {
     UIView *v = self.view;
-    if (!v || [v viewWithTag:0x57533136]) return;
+    if (!v) return;
+    
+    // Проверяем, нет ли уже добавленного жеста
+    for (UIGestureRecognizer *gr in v.gestureRecognizers) {
+        if ([gr isKindOfClass:[UILongPressGestureRecognizer class]] && gr.minimumPressDuration == [WSPrefs longPressDuration]) {
+            return;
+        }
+    }
+
     UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(ws16_handle:)];
     lp.minimumPressDuration = [WSPrefs longPressDuration];
     lp.allowableMovement = 10.0;
-    lp.tag = 0x57533136;
     [v addGestureRecognizer:lp];
 }
 
@@ -230,7 +246,7 @@ static BOOL gShrunk = NO;
         if (im) [imgs addObject:im];
     }
     WSOverlayView *ov = [[WSOverlayView alloc] initWithFrame:self.view.bounds images:imgs initialIndex:[WSWallpaperHelper savedIndex]];
-    ov.delegate = (id<WSOverlayViewDelegate>)self;
+    ov.delegate = self; // Теперь компилятор знает, что мы поддерживаем протокол
     [self.view addSubview:ov];
     gOverlay = ov;
     [ov present];
