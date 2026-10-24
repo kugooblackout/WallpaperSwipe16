@@ -3,195 +3,179 @@
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <QuartzCore/QuartzCore.h>
-#import "WSPrefs.h"
-#import "WSOverlayView.h"
 
-static WSOverlayView *gOverlay = nil;
+static UIView *gOverlay = nil;
 static BOOL gShrunk = NO;
+static NSInteger gCurrentIndex = 0;
 
-#pragma mark - Wallpaper Helper
+#pragma mark - Overlay View (UI)
 
-@interface WSWallpaperHelper : NSObject
-+ (NSArray<NSString *> *)imageFiles;
-+ (UIImage *)imageAtIndex:(NSInteger)idx;
-+ (NSInteger)savedIndex;
-+ (void)saveIndex:(NSInteger)idx;
-+ (NSInteger)count;
-+ (BOOL)applyImage:(UIImage *)img;
-+ (void)diagnose;
+@interface WSOverlayView : UIView <UIScrollViewDelegate>
+@property (nonatomic, strong) NSArray *images;
+@property (nonatomic, strong) UIScrollView *scroll;
+@property (nonatomic, strong) UIVisualEffectView *blur;
+@property (nonatomic, strong) UIButton *cancelBtn;
+@property (nonatomic, strong) UIButton *setBtn;
+@property (nonatomic, strong) NSMutableArray *cards;
 @end
 
-@implementation WSWallpaperHelper
+@implementation WSOverlayView
 
-+ (NSArray<NSString *> *)imageFiles {
-    NSString *dir = [WSPrefs wallpaperFolder];
-    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-    NSArray *all = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:nil];
-    if (!all) return @[];
-    NSMutableArray *out = [NSMutableArray array];
-    for (NSString *name in all) {
-        NSString *ext = name.pathExtension.lowercaseString;
-        if ([@[@"jpg", @"jpeg", @"png", @"heic", @"heif"] containsObject:ext]) {
-            [out addObject:name];
+- (instancetype)initWithFrame:(CGRect)frame images:(NSArray *)images {
+    if ((self = [super initWithFrame:frame])) {
+        self.images = images;
+        self.cards = [NSMutableArray array];
+        self.backgroundColor = [UIColor clearColor];
+
+        self.blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleDark]];
+        self.blur.frame = self.bounds;
+        self.blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [self addSubview:self.blur];
+
+        self.cancelBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        [self.cancelBtn setTitle:@"Отмена" forState:UIControlStateNormal];
+        self.cancelBtn.tintColor = [UIColor whiteColor];
+        self.cancelBtn.frame = CGRectMake(20, 60, 90, 30);
+        [self.cancelBtn addTarget:self action:@selector(tapCancel) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:self.cancelBtn];
+
+        self.setBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        [self.setBtn setTitle:@"Установить" forState:UIControlStateNormal];
+        self.setBtn.tintColor = [UIColor whiteColor];
+        self.setBtn.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+        self.setBtn.frame = CGRectMake(frame.size.width - 110, 60, 90, 30);
+        [self.setBtn addTarget:self action:@selector(tapSet) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:self.setBtn];
+
+        CGFloat top = 130.0;
+        CGFloat h = frame.size.height - top - 160;
+        self.scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, top, frame.size.width, h)];
+        self.scroll.showsHorizontalScrollIndicator = NO;
+        self.scroll.decelerationRate = UIScrollViewDecelerationRateFast;
+        self.scroll.delegate = self;
+        self.scroll.clipsToBounds = NO;
+        [self addSubview:self.scroll];
+
+        CGFloat cardH = MIN(460.0, h - 20);
+        CGFloat cardW = cardH * (220.0 / 460.0);
+        CGFloat sideInset = (frame.size.width - cardW) / 2.0;
+
+        for (NSInteger i = 0; i < self.images.count; i++) {
+            UIView *card = [[UIView alloc] initWithFrame:CGRectZero];
+            card.layer.cornerRadius = 22;
+            card.layer.masksToBounds = YES;
+            card.layer.borderWidth = 1.0;
+            card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.15].CGColor;
+
+            UIImageView *iv = [[UIImageView alloc] initWithImage:self.images[i]];
+            iv.frame = card.bounds;
+            iv.contentMode = UIViewContentModeScaleAspectFill;
+            iv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            iv.clipsToBounds = YES;
+            [card addSubview:iv];
+
+            [self.scroll addSubview:card];
+            [self.cards addObject:card];
         }
+
+        CGFloat contentW = sideInset * 2 + cardW * self.images.count + 40.0 * (self.images.count > 0 ? self.images.count - 1 : 0);
+        self.scroll.contentSize = CGSizeMake(contentW, h);
+        self.scroll.contentInset = UIEdgeInsetsMake(0, sideInset, 0, sideInset);
+
+        CGFloat x = 0;
+        for (NSInteger i = 0; i < self.images.count; i++) {
+            UIView *card = self.cards[i];
+            card.frame = CGRectMake(x, (h - cardH) / 2.0, cardW, cardH);
+            x += cardW + 40.0;
+        }
+        [self layoutCardScales];
     }
-    [out sortUsingSelector:@selector(localizedStandardCompare:)];
-    return out;
+    return self;
 }
 
-+ (NSInteger)count { return (NSInteger)[self imageFiles].count; }
-
-+ (UIImage *)imageAtIndex:(NSInteger)idx {
-    NSArray *files = [self imageFiles];
-    if (idx < 0 || idx >= (NSInteger)files.count) return nil;
-    NSString *path = [[WSPrefs wallpaperFolder] stringByAppendingPathComponent:files[idx]];
-    return [UIImage imageWithContentsOfFile:path];
+- (void)layoutCardScales {
+    CGFloat centerX = self.scroll.contentOffset.x + self.scroll.bounds.size.width / 2.0;
+    for (UIView *card in self.cards) {
+        CGFloat dist = fabs(card.center.x - centerX);
+        CGFloat maxDist = self.scroll.bounds.size.width * 0.6;
+        CGFloat t = MIN(dist / maxDist, 1.0);
+        card.transform = CGAffineTransformMakeScale(1.0 - 0.18 * t, 1.0 - 0.18 * t);
+        card.alpha = 1.0 - 0.4 * t;
+    }
 }
 
-+ (NSInteger)savedIndex {
-    return [[NSUserDefaults standardUserDefaults] integerForKey:@"WSLSIndex"];
+- (void)scrollViewDidScroll:(UIScrollView *)sv {
+    [self layoutCardScales];
+    CGFloat centerX = sv.contentOffset.x + sv.bounds.size.width / 2.0;
+    NSInteger nearest = 0;
+    CGFloat nearestDist = CGFLOAT_MAX;
+    for (NSInteger i = 0; i < self.cards.count; i++) {
+        CGFloat d = fabs([(UIView *)self.cards[i] center].x - centerX);
+        if (d < nearestDist) { nearestDist = d; nearest = i; }
+    }
+    gCurrentIndex = nearest;
 }
 
-+ (void)saveIndex:(NSInteger)idx {
-    [[NSUserDefaults standardUserDefaults] setInteger:idx forKey:@"WSLSIndex"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
+- (void)scrollViewDidEndDecelerating:(UIScrollView *)sv { [self snapToCurrent]; }
+- (void)scrollViewDidEndDragging:(UIScrollView *)sv willDecelerate:(BOOL)d { if (!d) [self snapToCurrent]; }
+
+- (void)snapToCurrent {
+    if (gCurrentIndex < 0 || gCurrentIndex >= (NSInteger)self.cards.count) return;
+    UIView *card = self.cards[gCurrentIndex];
+    CGFloat targetX = card.center.x - self.scroll.bounds.size.width / 2.0;
+    [self.scroll setContentOffset:CGPointMake(targetX, 0) animated:YES];
 }
 
-+ (BOOL)applyImage:(UIImage *)img {
-    if (!img) return NO;
+- (void)tapCancel {
+    [UIView animateWithDuration:0.2 animations:^{ self.alpha = 0; } completion:^(BOOL f) { [self removeFromSuperview]; gOverlay = nil; }];
+}
 
+- (void)tapSet {
+    if (gCurrentIndex < 0 || gCurrentIndex >= (NSInteger)self.cards.count) return;
+    UIImage *img = self.images[gCurrentIndex];
+    [[NSUserDefaults standardUserDefaults] setInteger:gCurrentIndex forKey:@"WSLSIndex"];
+    
     Class PL = NSClassFromString(@"PLStaticWallpaperImageViewController");
     if (!PL) {
         dlopen("/System/Library/PrivateFrameworks/PhotoLibraryServices.framework/PhotoLibraryServices", RTLD_LAZY);
-        dlopen("/System/Library/PrivateFrameworks/PhotosUICore.framework/PhotosUICore", RTLD_LAZY);
         PL = NSClassFromString(@"PLStaticWallpaperImageViewController");
     }
-
     if (PL) {
-        @try {
-            id vc = ((id (*)(id, SEL, UIImage *))objc_msgSend)([PL alloc], @selector(initWithUIImage:), img);
-            if (vc) {
-                SEL s1 = @selector(saveWallpaperToDiskAndPost:image:);
-                if ([vc respondsToSelector:s1]) {
-                    ((void (*)(id, SEL, BOOL, UIImage *))objc_msgSend)(vc, s1, YES, img);
-                    return YES;
-                }
-                SEL s2 = @selector(saveWallpaperToDiskAndPost:);
-                if ([vc respondsToSelector:s2]) {
-                    ((void (*)(id, SEL, BOOL))objc_msgSend)(vc, s2, YES);
-                    return YES;
-                }
-            }
-        } @catch (NSException *e) {
-            NSLog(@"[WS16] PLStatic exception: %@", e);
+        id vc = ((id (*)(id, SEL, UIImage *))objc_msgSend)([PL alloc], @selector(initWithUIImage:), img);
+        if ([vc respondsToSelector:@selector(saveWallpaperToDiskAndPost:image:)]) {
+            ((void (*)(id, SEL, BOOL, UIImage *))objc_msgSend)(vc, @selector(saveWallpaperToDiskAndPost:image:), YES, img);
         }
     }
-
-    Class WC = NSClassFromString(@"SBWallpaperController");
-    if (WC) {
-        id controller = nil;
-        if ([WC respondsToSelector:@selector(sharedInstance)]) {
-            controller = [WC performSelector:@selector(sharedInstance)];
-        } else if ([WC respondsToSelector:@selector(sharedInstanceIfExists)]) {
-            controller = [WC performSelector:@selector(sharedInstanceIfExists)];
-        }
-
-        if (controller) {
-            struct { SEL sel; int mode; } tries[] = {
-                { @selector(setWallpaperImage:forVariant:options:completionHandler:), 4 },
-                { @selector(setWallpaperImage:forVariant:options:), 3 },
-                { @selector(setWallpaperImage:forVariant:), 2 },
-                { @selector(setWallpaperImage:), 1 },
-            };
-            for (int i = 0; i < sizeof(tries)/sizeof(tries[0]); i++) {
-                SEL s = tries[i].sel;
-                if (![controller respondsToSelector:s]) continue;
-                @try {
-                    switch (tries[i].mode) {
-                        case 4:
-                            ((void (*)(id, SEL, UIImage *, NSInteger, id, id))objc_msgSend)(controller, s, img, 0, nil, nil);
-                            return YES;
-                        case 3:
-                            ((void (*)(id, SEL, UIImage *, NSInteger, id))objc_msgSend)(controller, s, img, 0, nil);
-                            return YES;
-                        case 2:
-                            ((void (*)(id, SEL, UIImage *, NSInteger))objc_msgSend)(controller, s, img, 0);
-                            return YES;
-                        case 1:
-                            ((void (*)(id, SEL, UIImage *))objc_msgSend)(controller, s, img);
-                            return YES;
-                    }
-                } @catch (NSException *e) {
-                    NSLog(@"[WS16] WC exception: %@", e);
-                }
-            }
-        }
-    }
-
-    NSLog(@"[WS16] Не удалось установить обои");
-    return NO;
+    [self tapCancel];
 }
 
-+ (void)diagnose {
-    NSLog(@"[WS16] ===== DIAGNOSTIC =====");
-    [self dumpClass:@"PLStaticWallpaperImageViewController"];
-    [self dumpClass:@"SBWallpaperController"];
-    NSLog(@"[WS16] ===== END =====");
-}
-
-+ (void)dumpClass:(NSString *)name {
-    Class c = NSClassFromString(name);
-    if (!c) {
-        NSLog(@"[WS16] %@ NOT FOUND", name);
-        return;
-    }
-    NSLog(@"[WS16] %@ = %p", name, c);
-    unsigned int mCount = 0;
-    Method *methods = class_copyMethodList(c, &mCount);
-    for (unsigned int i = 0; i < mCount; i++) {
-        NSLog(@"[WS16]   -%s", sel_getName(method_getName(methods[i])));
-    }
-    free(methods);
-}
 @end
 
 #pragma mark - SpringBoard Hook
 
-// Объявляем методы, чтобы компилятор не ругался
-@interface SBLockScreenViewController : UIViewController <WSOverlayViewDelegate>
+@interface SBLockScreenViewController : UIViewController
 - (void)ws16_setupGesture;
 - (void)ws16_handle:(UILongPressGestureRecognizer *)g;
 - (void)ws16_shrink:(UIView *)v;
 - (void)ws16_restore:(UIView *)v;
 - (void)ws16_showOverlay;
-- (void)overlayDidCancel:(WSOverlayView *)v;
-- (void)overlay:(WSOverlayView *)v didSelectIndex:(NSInteger)index;
-- (void)overlayDidTapAdd:(WSOverlayView *)v;
 @end
 
 %hook SBLockScreenViewController
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    if (![WSPrefs enabled]) return;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ [WSWallpaperHelper diagnose]; });
     [self ws16_setupGesture];
 }
 
 - (void)ws16_setupGesture {
     UIView *v = self.view;
     if (!v) return;
-    
-    // Проверяем, нет ли уже добавленного жеста
     for (UIGestureRecognizer *gr in v.gestureRecognizers) {
-        if ([gr isKindOfClass:[UILongPressGestureRecognizer class]] && gr.minimumPressDuration == [WSPrefs longPressDuration]) {
-            return;
-        }
+        if ([gr isKindOfClass:[UILongPressGestureRecognizer class]] && gr.minimumPressDuration == 0.35) return;
     }
-
     UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(ws16_handle:)];
-    lp.minimumPressDuration = [WSPrefs longPressDuration];
+    lp.minimumPressDuration = 0.35;
     lp.allowableMovement = 10.0;
     [v addGestureRecognizer:lp];
 }
@@ -210,10 +194,8 @@ static BOOL gShrunk = NO;
 - (void)ws16_shrink:(UIView *)v {
     if (gShrunk) return;
     gShrunk = YES;
-    if ([WSPrefs hapticFeedback]) {
-        UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-        [h impactOccurred];
-    }
+    UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    [h impactOccurred];
     [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0.4 options:UIViewAnimationOptionCurveEaseOut animations:^{
         v.transform = CGAffineTransformMakeScale(0.92, 0.92);
         v.layer.cornerRadius = 30;
@@ -232,45 +214,30 @@ static BOOL gShrunk = NO;
 
 - (void)ws16_showOverlay {
     if (gOverlay) return;
-    NSInteger count = [WSWallpaperHelper count];
-    if (count == 0) {
-        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"WallpaperSwipe16" message:@"Добавь изображения в /var/mobile/Library/WallpaperSwipe16/" preferredStyle:UIAlertControllerStyleAlert];
+    
+    NSString *dir = @"/var/mobile/Library/WallpaperSwipe16";
+    NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:nil];
+    NSMutableArray *imgs = [NSMutableArray array];
+    for (NSString *name in files) {
+        if ([@[@"jpg", @"jpeg", @"png", @"heic"] containsObject:name.pathExtension.lowercaseString]) {
+            [imgs addObject:[UIImage imageWithContentsOfFile:[dir stringByAppendingPathComponent:name]]];
+        }
+    }
+    
+    if (imgs.count == 0) {
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"WallpaperSwipe16" message:@"Нет картинок в /var/mobile/Library/WallpaperSwipe16/" preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
         [self ws16_restore:self.view];
         return;
     }
-    NSMutableArray<UIImage *> *imgs = [NSMutableArray array];
-    for (NSInteger i = 0; i < count; i++) {
-        UIImage *im = [WSWallpaperHelper imageAtIndex:i];
-        if (im) [imgs addObject:im];
-    }
-    WSOverlayView *ov = [[WSOverlayView alloc] initWithFrame:self.view.bounds images:imgs initialIndex:[WSWallpaperHelper savedIndex]];
-    ov.delegate = self; // Теперь компилятор знает, что мы поддерживаем протокол
+
+    WSOverlayView *ov = [[WSOverlayView alloc] initWithFrame:self.view.bounds images:imgs];
+    ov.alpha = 0;
     [self.view addSubview:ov];
     gOverlay = ov;
-    [ov present];
-}
-
-- (void)overlayDidCancel:(WSOverlayView *)v {
-    [v dismiss];
-    gOverlay = nil;
-    [self ws16_restore:self.view];
-}
-
-- (void)overlay:(WSOverlayView *)v didSelectIndex:(NSInteger)index {
-    [WSWallpaperHelper saveIndex:index];
-    UIImage *img = [WSWallpaperHelper imageAtIndex:index];
-    [WSWallpaperHelper applyImage:img];
-    [v dismiss];
-    gOverlay = nil;
-    [self ws16_restore:self.view];
-}
-
-- (void)overlayDidTapAdd:(WSOverlayView *)v {
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Добавить обои" message:@"Открой Filza и помести изображения в\n/var/mobile/Library/WallpaperSwipe16/" preferredStyle:UIAlertControllerStyleAlert];
-    [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-    [self presentViewController:a animated:YES completion:nil];
+    
+    [UIView animateWithDuration:0.25 animations:^{ ov.alpha = 1; }];
 }
 
 %end
