@@ -7,17 +7,23 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14 # Используем стабильный раннер вместо macos-latest
+    runs-on: macos-14
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: true
 
-      - name: Install Theos
-        uses: Randomblock1/theos-action@v1
+      - name: Install Theos & SDK
+        run: |
+          export THEOS=~/theos
+          git clone --recursive https://github.com/theos/theos.git $THEOS
+          curl -LO https://github.com/theos/sdks/archive/master.zip
+          unzip -q master.zip
+          mkdir -p $THEOS/sdks
+          mv sdks-master/*.sdk $THEOS/sdks/
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+          echo "$THEOS/bin" >> $GITHUB_PATH
 
-      - name: Build Package (Rootless)
+      - name: Build Package
         run: |
           make clean
           make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
