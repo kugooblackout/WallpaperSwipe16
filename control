@@ -6,4 +6,4 @@ Description: iOS 16 style wallpaper switcher for iOS 15 lock screen
 Maintainer: you
 Author: you
 Section: Tweaks
-Depends: mobilesubstrate
+Depends: mobilesubstrate 
